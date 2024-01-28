@@ -1,46 +1,39 @@
 use std::{
+    sync::Arc,
     collections::VecDeque,
     time::{Duration, Instant}
 };
-use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 
-use futures::StreamExt;
+use coerce::actor::scheduler::timer::Timer;
+use coerce::actor::system::ActorSystem;
+use coerce::actor::LocalActorRef;
+// use coerce::actor::worker::Worker;
+
+use axum::{
+    Router,
+    routing::get,
+    extract::{Extension,Path},
+    response::{IntoResponse, Response},
+};
 use tokio::sync::RwLock;
-use tokio_stream::wrappers::IntervalStream;
-use messages::prelude::{Address, RuntimeActorExt};
 
 mod ms_edge;
 mod ms_edge_actor;
 
-static mut GLB_DURATION_VEC: Vec<f64> = Vec::new();
-
 struct Common {
-    tts_address: Address<ms_edge_actor::TTSActor>,
+    actor_ref: LocalActorRef<ms_edge_actor::TTSActor>,
     adaptive_timeout: f64,
+    duration_vec: Vec<f64>,
 }
 
-impl Common {
-    fn default() -> Common {
-        let address = ms_edge_actor::TTSActor{ws_streams: VecDeque::new(), tts: ms_edge::TTS::default()}.spawn();
-        let tasks = IntervalStream::new(tokio::time::interval(Duration::from_secs(3)))
-            .map(|_| ms_edge_actor::WSSMsg);
-        address.clone().spawn_stream_forwarder(tasks);
-        Common {
-            tts_address: address,
-            adaptive_timeout: 5.0,
-        }
-    }
-}
-
-#[get("/tts/{text}")]
-async fn tts(req: HttpRequest, common: web::Data<RwLock<Common>>) -> impl Responder {
+async fn tts(Path(text): Path<String>, Extension(common): Extension<Arc<RwLock<Common>>>) -> Response {
     let start = Instant::now();
     let voice: &'static str = "zh-TW-HsiaoChenNeural";
-    let text = req.match_info().query("text").trim_start();
-    let mut common_lock = common.write().await;
-    let timeout = common_lock.adaptive_timeout;
+    let text = text.trim_start();
+    let mut common_rw = common.write().await;
+    let timeout = common_rw.adaptive_timeout;
     let mut mp3_vec = match tokio::time::timeout(
-        Duration::from_secs_f64(timeout), common_lock.tts_address.send(ms_edge_actor::TTSMsg{start, voice, text: text.to_string()})
+        Duration::from_secs_f64(timeout), common_rw.actor_ref.send(ms_edge_actor::TTSMessage{start, voice, text: text.to_string()})
     ).await {
         Ok(Ok(vv)) => {vv},
         Ok(Err(error)) => {
@@ -56,40 +49,55 @@ async fn tts(req: HttpRequest, common: web::Data<RwLock<Common>>) -> impl Respon
         mp3_vec = ms_edge::get_sample_vec().await;
         tokio::time::sleep(Duration::from_secs_f64(0.01)).await;
     }
+
     let duration = start.elapsed().as_secs_f64();
-    unsafe {
-        if mp3_vec.len() == 7488 {
-            GLB_DURATION_VEC.push(0.0);
-        } else {
-            GLB_DURATION_VEC.push(duration);
-        }
-        let (avg_duration, error_count)= ms_edge::duration_stats(&GLB_DURATION_VEC);
-        let duration_vec_len = GLB_DURATION_VEC.len();
-        if duration_vec_len > 30 {
-            common_lock.adaptive_timeout = avg_duration * 2.5;
-        }
-        println!("{:.2},{:.3},{},{},{},{}", duration, avg_duration, error_count, duration_vec_len, text, mp3_vec.len());
+    if mp3_vec.len() == 7488 {
+        common_rw.duration_vec.push(0.0);
+    } else {
+        common_rw.duration_vec.push(duration);
     }
-    HttpResponse::Ok().content_type("audio/mpeg").body(mp3_vec)
+    let (avg_duration, error_count)= ms_edge::duration_stats(&common_rw.duration_vec);
+    let duration_vec_len = common_rw.duration_vec.len();
+    if duration_vec_len > 30 {
+        common_rw.adaptive_timeout = avg_duration * 2.5;
+    }
+    println!("{:.2},{:.3},{},{},{},{}", duration, avg_duration, error_count, duration_vec_len, text, mp3_vec.len());
+    let mut response = mp3_vec.into_response();
+    response.headers_mut().insert("Content-Type", "audio/mpeg".parse().unwrap());
+    response
 }
 
-#[get("/ping")]
-async fn ping() -> impl Responder {
-    HttpResponse::Ok().body("hi")
+async fn ping() -> &'static str{
+    "hi"
 }
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+// #[tokio::main]
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ms_edge::get_sample_vec().await;
-    HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(RwLock::new(Common::default())))
-            .service(ping)
-            .service(tts)
-    })
-    .workers(5)
-    .worker_max_blocking_threads(1)
-    .bind(("0.0.0.0", 5001))?
-    .run()
-    .await
+
+    let ctx = ActorSystem::new();
+    let ws_streams = VecDeque::new();
+    let tts_actor = ms_edge_actor::TTSActor{tts: ms_edge::TTS::default(), ws_streams: ws_streams, timeout_vec: Vec::new()};
+    // let mut worker_ref = Worker::new(tts_actor, 4, "worker", &mut ctx).await?;
+    let actor_ref = ctx.new_anon_actor(tts_actor).await?;
+
+    Timer::start(
+        actor_ref.clone(),
+        Duration::from_secs(3),
+        ms_edge_actor::WSSMessage{},
+    );
+    let common = Common{adaptive_timeout: 5.0, actor_ref, duration_vec: Vec::new()};
+
+    let common_rw= Arc::new(RwLock::new(common));
+    let app = Router::new()
+        .route("/ping", get(ping))
+        .route("/tts/:text", get(tts))
+        .layer(Extension(common_rw));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:5001")
+        .await?;
+    println!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app).await?;
+    Ok(())
 }

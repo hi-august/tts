@@ -11,6 +11,7 @@ use tokio_tungstenite::tungstenite::http::header::{USER_AGENT, HeaderValue};
 
 pub type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+
 pub struct TTS {
     endpoint: &'static str,
     speech: &'static str,
