@@ -1,0 +1,35 @@
+# docker build -f tts.Dockerfile . -t rust_tts
+# docker-compose -f tts_compose.yml up -d
+
+version: "3.0"
+services:
+    tts:
+        container_name: rust_tts 
+        ports:
+            - 5000:5001
+        build:
+          context: .
+          dockerfile: tts.Dockerfile
+        restart: always
+        image: rust_tts:latest
+        entrypoint: "./tts"
+    tts2:
+        container_name: rust_tts_2
+        ports:
+            - 5001:5001
+        build:
+          context: .
+          dockerfile: tts.Dockerfile
+        restart: always
+        image: rust_tts:latest
+        entrypoint: "./tts"
+    tts3:
+        container_name: rust_tts_3
+        ports:
+            - 5002:5001
+        build:
+          context: .
+          dockerfile: tts.Dockerfile
+        restart: always
+        image: rust_tts:latest
+        entrypoint: "./tts"
