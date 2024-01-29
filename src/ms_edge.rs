@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::http::header::{USER_AGENT, HeaderValue};
 
 pub type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-
+#[derive(Clone)]
 pub struct TTS {
     endpoint: &'static str,
     speech: &'static str,
@@ -72,7 +72,7 @@ impl TTS {
             self.uuid, millis, ssml
         );
         writer.send(content_msg.into()).await?;
-        let mut mp3_vec: Vec<u8> = Vec::new();
+        let mut audio_vec: Vec<u8> = Vec::new();
         let pat = "Path:audio\r\n".as_bytes().to_vec();
         while let Some(data) = reader.next().await {
             match data {
@@ -80,7 +80,7 @@ impl TTS {
                     if data.is_binary() {
                         let all = data.into_data();
                         if let Some(index) = all.windows(pat.len()).position(|window| window == &pat[..]) {
-                            mp3_vec.extend_from_slice(&all[index + pat.len()..]);
+                            audio_vec.extend_from_slice(&all[index + pat.len()..]);
                         }
                     } else if data.is_text() && data.into_text()?.contains("Path:turn.end") {
                         break;
@@ -90,7 +90,7 @@ impl TTS {
             }
         }
         writer.close().await?;
-        Ok(mp3_vec)
+        Ok(audio_vec)
     }
 }
 
@@ -105,14 +105,14 @@ pub fn gen_millis() -> u128 {
         .as_millis()
 }
 
-pub fn duration_stats(nums: &[f64]) -> (f64, usize) {
+pub fn vec_stats(nums: &[f64]) -> (f64, usize, usize) {
     let sum: f64 = nums.iter().sum();
-    let count = nums.iter().filter(|&&x| x == 0.0).count();
-    let length = nums.len() - count;
-    (sum / length as f64, count)
+    let error_count = nums.iter().filter(|&&x| x == 0.0).count();
+    let length = nums.len() - error_count;
+    (sum / length as f64, length as usize, error_count)
 }
 
-pub async fn get_sample_vec() -> Vec<u8> {
+pub async fn get_or_init_sample() -> Vec<u8> {
     let sample: &'static str = "/tmp/sample.mp3";
     let voice: &'static str = "zh-TW-HsiaoChenNeural";
     if !Path::new(&sample).exists() {
@@ -124,18 +124,18 @@ pub async fn get_sample_vec() -> Vec<u8> {
                 return Vec::new()
             }
         };
-        let mp3_vec = match tts.send_content(ws_stream, voice, "嗯".to_string()).await {
+        let audio_vec = match tts.send_content(ws_stream, voice, "嗯".to_string()).await {
             Ok(vv) => vv,
             Err(error) => {
                 println!("send_content: {:?}", error);
                 return Vec::new()
             }
         };
-        if mp3_vec.len() == 7488 {
+        if audio_vec.len() == 7488 {
             println!("save sample file!");
-            let _ = fs::write(sample, &mp3_vec);
+            let _ = fs::write(sample, &audio_vec);
         }
-        return mp3_vec;
+        return audio_vec;
     } else {
         fs::read(sample).unwrap_or(Vec::new())
     }

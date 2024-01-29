@@ -1,12 +1,11 @@
-use coerce::actor::context::ActorContext;
-use coerce::actor::message::{Handler, Message};
-use coerce::actor::scheduler::timer::TimerTick;
-use coerce::actor::Actor;
-
 use std::time::Instant;
 use std::collections::VecDeque;
 use futures_util::{SinkExt, StreamExt};
 
+use coerce::actor::context::ActorContext;
+use coerce::actor::message::{Handler, Message};
+use coerce::actor::scheduler::timer::TimerTick;
+use coerce::actor::Actor;
 use async_trait::async_trait;
 
 use crate::ms_edge;
@@ -15,10 +14,11 @@ use crate::ms_edge;
 pub struct TTSMessage {
     pub start: Instant,
     pub voice: &'static str,
-    pub text: String
+    pub content: String
 }
 #[derive(Clone)]
 pub struct WSSMessage {}
+
 
 pub struct TTSActor {
     pub timeout_vec: Vec<f64>,
@@ -44,13 +44,13 @@ impl Handler<TTSMessage> for TTSActor {
         // 弹出队列前端的元素
         let duration = msg.start.elapsed().as_secs_f64();
         self.timeout_vec.push(duration);
-        let (avg_duration_timeout, _)= ms_edge::duration_stats(&self.timeout_vec);
-        println!("channel time {:.2}, {:.3} ws_stream len {}, {:?}", duration, avg_duration_timeout, self.ws_streams.len(), std::thread::current().id());
+        let (avg_timeout, _, _)= ms_edge::vec_stats(&self.timeout_vec);
+        println!("channel {:.2},{:.3},ws_stream len {},{},{:?}", duration, avg_timeout, self.ws_streams.len(), msg.content, std::thread::current().id());
         if let Some(ws_stream) = self.ws_streams.pop_front() {
-            self.tts.send_content(ws_stream, msg.voice, msg.text).await.unwrap_or(Vec::new())
+            self.tts.send_content(ws_stream, msg.voice, msg.content).await.unwrap_or(Vec::new())
         } else {
-            println!("ws_stream not found {}", self.ws_streams.len());
-            ms_edge::get_sample_vec().await
+            println!("channel ws_stream not found {}", self.ws_streams.len());
+            ms_edge::get_or_init_sample().await
         }
     }
 }
@@ -59,7 +59,7 @@ impl Handler<TTSMessage> for TTSActor {
 impl Handler<WSSMessage> for TTSActor {
     async fn handle(&mut self, _: WSSMessage, _ctx: &mut ActorContext) {
         // println!("ws_stream {}", self.ws_streams.len());
-        if self.ws_streams.len() > 10 {
+        if self.ws_streams.len() > 5 {
             // 弹出队列末尾的元素
             if let Some(ws_stream) = self.ws_streams.pop_back() {
                 let (mut writer, _) = ws_stream.split();

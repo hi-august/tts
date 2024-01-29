@@ -4,17 +4,18 @@ use std::{
     time::{Duration, Instant}
 };
 
-use coerce::actor::scheduler::timer::Timer;
-use coerce::actor::system::ActorSystem;
-use coerce::actor::LocalActorRef;
-// use coerce::actor::worker::Worker;
-
 use axum::{
     Router,
     routing::get,
+    http::HeaderValue,
     extract::{Extension,Path},
     response::{IntoResponse, Response},
 };
+
+use coerce::actor::scheduler::timer::Timer;
+use coerce::actor::system::ActorSystem;
+use coerce::actor::LocalActorRef;
+
 use tokio::sync::RwLock;
 
 mod ms_edge;
@@ -29,11 +30,10 @@ struct Common {
 async fn tts(Path(text): Path<String>, Extension(common): Extension<Arc<RwLock<Common>>>) -> Response {
     let start = Instant::now();
     let voice: &'static str = "zh-TW-HsiaoChenNeural";
-    let text = text.trim_start();
-    let mut common_rw = common.write().await;
-    let timeout = common_rw.adaptive_timeout;
-    let mut mp3_vec = match tokio::time::timeout(
-        Duration::from_secs_f64(timeout), common_rw.actor_ref.send(ms_edge_actor::TTSMessage{start, voice, text: text.to_string()})
+    let content = text.trim_start();
+    let timeout = common.read().await.adaptive_timeout;
+    let mut audio_vec = match tokio::time::timeout(
+        Duration::from_secs_f64(timeout), common.read().await.actor_ref.send(ms_edge_actor::TTSMessage{start, voice, content: content.to_string()})
     ).await {
         Ok(Ok(vv)) => {vv},
         Ok(Err(error)) => {
@@ -45,25 +45,26 @@ async fn tts(Path(text): Path<String>, Extension(common): Extension<Arc<RwLock<C
             Vec::new()
         }
     };
-    while mp3_vec.len() < 2048 {
-        mp3_vec = ms_edge::get_sample_vec().await;
+    let mut audio_vec_len = audio_vec.len();
+    while audio_vec_len < 2048 {
+        audio_vec = ms_edge::get_or_init_sample().await;
         tokio::time::sleep(Duration::from_secs_f64(0.01)).await;
     }
 
+    audio_vec_len = audio_vec.len();
     let duration = start.elapsed().as_secs_f64();
-    if mp3_vec.len() == 7488 {
-        common_rw.duration_vec.push(0.0);
+    if audio_vec_len == 7488 {
+        common.write().await.duration_vec.push(0.0);
     } else {
-        common_rw.duration_vec.push(duration);
+        common.write().await.duration_vec.push(duration);
     }
-    let (avg_duration, error_count)= ms_edge::duration_stats(&common_rw.duration_vec);
-    let duration_vec_len = common_rw.duration_vec.len();
+    let (avg_duration, duration_vec_len, error_count)= ms_edge::vec_stats(&common.read().await.duration_vec);
     if duration_vec_len > 30 {
-        common_rw.adaptive_timeout = avg_duration * 2.5;
+        common.write().await.adaptive_timeout = avg_duration * 2.5;
     }
-    println!("{:.2},{:.3},{},{},{},{}", duration, avg_duration, error_count, duration_vec_len, text, mp3_vec.len());
-    let mut response = mp3_vec.into_response();
-    response.headers_mut().insert("Content-Type", "audio/mpeg".parse().unwrap());
+    println!("{:.2},{:.3},{},{},{},{}", duration, avg_duration, error_count, duration_vec_len, content, audio_vec_len);
+    let mut response = audio_vec.into_response();
+    response.headers_mut().insert("Content-Type", HeaderValue::from_static("audio/mpeg"));
     response
 }
 
@@ -71,20 +72,18 @@ async fn ping() -> &'static str{
     "hi"
 }
 
-// #[tokio::main]
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ms_edge::get_sample_vec().await;
+    ms_edge::get_or_init_sample().await;
 
     let ctx = ActorSystem::new();
     let ws_streams = VecDeque::new();
-    let tts_actor = ms_edge_actor::TTSActor{tts: ms_edge::TTS::default(), ws_streams: ws_streams, timeout_vec: Vec::new()};
-    // let mut worker_ref = Worker::new(tts_actor, 4, "worker", &mut ctx).await?;
+    let tts_actor = ms_edge_actor::TTSActor{tts: ms_edge::TTS::default(), ws_streams, timeout_vec: Vec::new()};
     let actor_ref = ctx.new_anon_actor(tts_actor).await?;
 
     Timer::start(
         actor_ref.clone(),
-        Duration::from_secs(3),
+        Duration::from_secs(5),
         ms_edge_actor::WSSMessage{},
     );
     let common = Common{adaptive_timeout: 5.0, actor_ref, duration_vec: Vec::new()};
@@ -95,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/tts/:text", get(tts))
         .layer(Extension(common_rw));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:5001")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000")
         .await?;
     println!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;

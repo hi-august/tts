@@ -6,7 +6,7 @@ services:
     tts:
         container_name: rust_tts 
         ports:
-            - 5000:5001
+            - 5000:5000
         build:
           context: .
           dockerfile: tts.Dockerfile
@@ -16,7 +16,7 @@ services:
     tts2:
         container_name: rust_tts_2
         ports:
-            - 5001:5001
+            - 5001:5000
         build:
           context: .
           dockerfile: tts.Dockerfile
@@ -26,7 +26,7 @@ services:
     tts3:
         container_name: rust_tts_3
         ports:
-            - 5002:5001
+            - 5002:5000
         build:
           context: .
           dockerfile: tts.Dockerfile
