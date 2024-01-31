@@ -10,6 +10,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::{USER_AGENT, HeaderValue};
 
 pub type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+pub const GLB_TTS_VOICE: &str = "zh-TW-HsiaoChenNeural";
+pub const GLB_AUDIO_SIZE: usize = 7488;
 
 #[derive(Clone)]
 pub struct TTS {
@@ -42,7 +44,7 @@ impl TTS {
         let (ws_stream, _) = connect_async(req).await?;
         Ok(ws_stream)
     }
-    fn get_ssml(&self, voice: &'static str, text: String) -> String {
+    fn get_ssml(&self, voice: &str, text: String) -> String {
         format!(
             r#"
             <speak version="1.0" xmlns="https://www.w3.org/2001/10/synthesis" xml:lang="en-US">
@@ -54,7 +56,7 @@ impl TTS {
             voice, text
         )
     }
-    pub async fn send_content(&self, ws_stream: WebSocketStream, voice: &'static str, text: String) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub async fn send_content(&self, ws_stream: WebSocketStream, voice: &str, text: String) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let ssml = self.get_ssml(voice, text);
         Ok(self.send_ssml(ws_stream, ssml).await?)
     }
@@ -98,11 +100,12 @@ fn gen_uuid() -> String {
     Uuid::new_v4().to_string().to_uppercase()
 }
 
-pub fn gen_millis() -> u128 {
-    SystemTime::now()
+pub fn gen_millis() -> f64 {
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("SystemTime::now panic")
-        .as_millis()
+        .as_millis();
+    millis as f64
 }
 
 pub fn vec_stats(nums: &[f64]) -> (f64, usize, usize) {
@@ -112,9 +115,8 @@ pub fn vec_stats(nums: &[f64]) -> (f64, usize, usize) {
     (sum / length as f64, length as usize, error_count)
 }
 
-pub async fn get_or_init_sample() -> Vec<u8> {
-    let sample: &'static str = "/tmp/sample.mp3";
-    let voice: &'static str = "zh-TW-HsiaoChenNeural";
+pub async fn get_init_sample() -> Vec<u8> {
+    let sample: &str = "/tmp/sample.mp3";
     if !Path::new(&sample).exists() {
         let tts = TTS::default();
         let ws_stream = match tts.connect().await {
@@ -124,14 +126,14 @@ pub async fn get_or_init_sample() -> Vec<u8> {
                 return Vec::new()
             }
         };
-        let audio_vec = match tts.send_content(ws_stream, voice, "嗯".to_string()).await {
+        let audio_vec = match tts.send_content(ws_stream, GLB_TTS_VOICE, "嗯".to_string()).await {
             Ok(vv) => vv,
             Err(error) => {
                 println!("send_content: {:?}", error);
                 return Vec::new()
             }
         };
-        if audio_vec.len() == 7488 {
+        if audio_vec.len() == GLB_AUDIO_SIZE {
             println!("save sample file!");
             let _ = fs::write(sample, &audio_vec);
         }
