@@ -1,6 +1,7 @@
 use std::{
     sync::Arc,
-    time::Duration
+    time::Duration,
+    collections::VecDeque,
 };
 
 use axum::{
@@ -12,49 +13,57 @@ use axum::{
 };
 
 use tokio::sync::RwLock;
-use coerce::sharding::Sharded;
+use coerce::actor::LocalActorRef;
 
-mod ms_edge;
-mod ms_edge_actor;
+mod edge;
+mod edge_actor;
 
 struct Common {
-    sharded: Sharded<ms_edge_actor::TTSActor>,
+    actors_ref: VecDeque<LocalActorRef<edge_actor::TTSActor>>,
     adaptive_timeout: f64,
     duration_vec: Vec<f64>,
 }
 
 async fn tts(Path(text): Path<String>, Extension(common): Extension<Arc<RwLock<Common>>>) -> Response {
-    let start = ms_edge::gen_millis();
+    let start = edge::gen_millis();
     let content = text.trim_start();
     let timeout = common.read().await.adaptive_timeout;
-    let mut audio_vec = match tokio::time::timeout(
-        Duration::from_secs_f64(timeout), common.read().await.sharded.send(ms_edge_actor::TTSMessage{start, content: content.to_string()})
-    ).await {
-        Ok(Ok(vv)) => {vv},
-        Ok(Err(error)) => {
-            println!("send_content error: {:?}", error);
-            Vec::new()
-        }
-        Err(error) => {
-            println!("timeout {:.2} error {:?}", timeout, error);
-            Vec::new()
-        }
-    };
+    let result = common.write().await.actors_ref.pop_front();
+    let mut audio_vec;
+    if result.is_some() {
+        let actor_ref = result.unwrap();
+        audio_vec = match tokio::time::timeout(
+            Duration::from_secs_f64(timeout), actor_ref.clone().send(edge_actor::TTSMessage{start, timeout, content: content.to_string()})
+        ).await {
+            Ok(Ok(vv)) => {vv},
+            Ok(Err(error)) => {
+                println!("send_content error: {:?}", error);
+                Vec::new()
+            }
+            Err(error) => {
+                println!("timeout {:.2} error {:?}", timeout, error);
+                Vec::new()
+            }
+        };
+        common.write().await.actors_ref.push_back(actor_ref);
+    } else {
+        audio_vec = Vec::new();
+    }
     let mut audio_vec_len = audio_vec.len();
     while audio_vec_len < 2048 {
-        audio_vec = ms_edge::get_init_sample().await;
+        audio_vec = edge::get_sample().await;
         audio_vec_len = audio_vec.len();
     }
     {
-        let duration = (ms_edge::gen_millis() - start) / 1000.0;
-        if audio_vec_len == ms_edge::GLB_AUDIO_SIZE {
+        let duration = (edge::gen_millis() - start) / 1000.0;
+        if audio_vec_len == edge::GLB_AUDIO_SIZE {
             common.write().await.duration_vec.push(0.0);
         } else {
             common.write().await.duration_vec.push(duration);
         }
-        let (avg_duration, duration_vec_len, error_count)= ms_edge::vec_stats(&common.read().await.duration_vec);
+        let (avg_duration, duration_vec_len, error_count)= edge::vec_stats(&common.read().await.duration_vec);
         if duration_vec_len > 30 {
-            common.write().await.adaptive_timeout = avg_duration * 2.5;
+            common.write().await.adaptive_timeout = avg_duration * 2.75;
         }
         println!("{:.2},{:.3},{},{},{},{}", duration, avg_duration, error_count, duration_vec_len, content, audio_vec_len);
     }
@@ -70,10 +79,10 @@ async fn ping() -> &'static str{
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ms_edge::get_init_sample().await;
-    // sharded
-    let sharded = ms_edge_actor::get_init_sharded().await;
-    let common = Common{adaptive_timeout: 5.0, sharded, duration_vec: Vec::new()};
+    edge::get_sample().await;
+    // actors_ref
+    let actors_ref = edge_actor::get_actors_ref().await;
+    let common = Common{adaptive_timeout: 5.0, actors_ref, duration_vec: Vec::new()};
     let common_rw= Arc::new(RwLock::new(common));
     let app = Router::new()
         .route("/ping", get(ping))

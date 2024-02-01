@@ -13,6 +13,3 @@ coerce = { version = "0.8.11", features = ["remote", "sharding"] }
 async-trait = "0.1.77"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3.30"
-coerce-macros = "0.2.0"
-serde_json = "1.0.113"
-serde = { version = "1.0.196", features = ["derive"] }

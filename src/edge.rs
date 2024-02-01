@@ -115,7 +115,7 @@ pub fn vec_stats(nums: &[f64]) -> (f64, usize, usize) {
     (sum / length as f64, length as usize, error_count)
 }
 
-pub async fn get_init_sample() -> Vec<u8> {
+pub async fn get_sample() -> Vec<u8> {
     let sample: &str = "/tmp/sample.mp3";
     if !Path::new(&sample).exists() {
         let tts = TTS::default();
