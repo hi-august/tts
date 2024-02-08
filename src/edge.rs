@@ -10,8 +10,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::{USER_AGENT, HeaderValue};
 
 pub type WebSocketStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
 pub const GLB_TTS_VOICE: &str = "zh-TW-HsiaoChenNeural";
-pub const GLB_AUDIO_SIZE: usize = 7488;
+pub const GLB_AUDIO_SIZE: usize = 7632;
 
 #[derive(Clone)]
 pub struct TTS {
@@ -126,17 +127,15 @@ pub async fn get_sample() -> Vec<u8> {
                 return Vec::new()
             }
         };
-        let audio_vec = match tts.send_content(ws_stream, GLB_TTS_VOICE, "嗯".to_string()).await {
+        let audio_vec = match tts.send_content(ws_stream, GLB_TTS_VOICE, "咦!".to_string()).await {
             Ok(vv) => vv,
             Err(error) => {
                 println!("send_content: {:?}", error);
                 return Vec::new()
             }
         };
-        if audio_vec.len() == GLB_AUDIO_SIZE {
-            println!("save sample file!");
-            let _ = fs::write(sample, &audio_vec);
-        }
+        println!("save sample file size {}!", audio_vec.len());
+        let _ = fs::write(sample, &audio_vec);
         return audio_vec;
     } else {
         fs::read(sample).unwrap_or(Vec::new())

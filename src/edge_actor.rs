@@ -45,9 +45,9 @@ impl Actor for TTSActor {
         println!("TTSActor is_starting {:?}", ctx.is_starting());
         println!("Starting sched tasks");
         let actor_ref = self.actor_ref(ctx);
-        Timer::start(
+        Timer::start_immediately(
             actor_ref,
-            Duration::from_secs(7),
+            Duration::from_secs(13),
             WSSMessage{},
         );
     }
@@ -81,7 +81,7 @@ impl Handler<TTSMessage> for TTSActor {
 #[async_trait]
 impl Handler<WSSMessage> for TTSActor {
     async fn handle(&mut self, _: WSSMessage, _ctx: &mut ActorContext) {
-        if self.ws_streams.len() > 1 {
+        if self.ws_streams.len() > 0 {
             // 弹出队列末尾的元素
             if let Some(ws_stream) = self.ws_streams.pop_back() {
                 let (mut writer, _) = ws_stream.split();
@@ -103,7 +103,7 @@ impl Handler<WSSMessage> for TTSActor {
 // actors_ref
 pub async fn get_actors_ref() -> VecDeque<LocalActorRef<TTSActor>> {
     let mut actors_ref = VecDeque::new();
-    for _ in 0..3 {
+    for _ in 0..12 {
         let actor_id = new_actor_id();
         let ctx = ActorSystem::new();
         let actor = TTSActor{tts: edge::TTS::default(), ws_streams: VecDeque::new(), timeout_vec: Vec::new()};
