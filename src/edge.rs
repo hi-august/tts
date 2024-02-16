@@ -137,7 +137,6 @@ pub async fn get_sample() -> Vec<u8> {
         println!("save sample file size {}!", audio_vec.len());
         let _ = fs::write(sample, &audio_vec);
         return audio_vec;
-    } else {
-        fs::read(sample).unwrap_or(Vec::new())
     }
+    fs::read(sample).unwrap_or(Vec::new())
 }

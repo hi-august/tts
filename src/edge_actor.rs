@@ -42,8 +42,6 @@ impl TimerTick for WSSMessage {}
 #[async_trait]
 impl Actor for TTSActor {
     async fn started(&mut self, ctx: &mut ActorContext) {
-        println!("TTSActor is_starting {:?}", ctx.is_starting());
-        println!("Starting sched tasks");
         let actor_ref = self.actor_ref(ctx);
         Timer::start_immediately(
             actor_ref,
@@ -101,14 +99,15 @@ impl Handler<WSSMessage> for TTSActor {
 }
 
 // actors_ref
-pub async fn get_actors_ref() -> VecDeque<LocalActorRef<TTSActor>> {
-    let mut actors_ref = VecDeque::new();
+pub async fn get_tts_actors() -> VecDeque<LocalActorRef<TTSActor>> {
+    let mut tts_actors = VecDeque::new();
+    println!("TTSActor starting");
     for _ in 0..12 {
         let actor_id = new_actor_id();
         let ctx = ActorSystem::new();
         let actor = TTSActor{tts: edge::TTS::default(), ws_streams: VecDeque::new(), timeout_vec: Vec::new()};
         let actor_ref = ctx.new_actor_deferred(actor_id, actor, ActorType::Tracked).await;
-        actors_ref.push_front(actor_ref)
+        tts_actors.push_front(actor_ref)
     }
-    actors_ref
+    tts_actors
 }

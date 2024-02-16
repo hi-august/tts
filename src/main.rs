@@ -19,7 +19,7 @@ mod edge;
 mod edge_actor;
 
 struct Common {
-    actors_ref: VecDeque<LocalActorRef<edge_actor::TTSActor>>,
+    tts_actors: VecDeque<LocalActorRef<edge_actor::TTSActor>>,
     adaptive_timeout: f64,
     duration_vec: Vec<f64>,
 }
@@ -60,7 +60,7 @@ async fn tts(Path(text): Path<String>, Extension(common): Extension<Arc<RwLock<C
         }
         let (avg_duration, duration_vec_len, error_count)= edge::vec_stats(&common.read().await.duration_vec);
         if duration_vec_len > 15 {
-            common.write().await.adaptive_timeout = avg_duration * 2.75;
+            common.write().await.adaptive_timeout = avg_duration * 3.0;
         }
         println!("{:.2},{:.3},{},{},{},{}", duration, avg_duration, error_count, duration_vec_len, content, audio_vec_len);
     }
@@ -70,15 +70,15 @@ async fn tts(Path(text): Path<String>, Extension(common): Extension<Arc<RwLock<C
 }
 
 async fn try_send_message(content: &str, start: f64, timeout: f64, common: Arc<RwLock<Common>>) -> Result<Vec<u8>, String> {
-    let result = common.write().await.actors_ref.pop_front();
-    if let Some(actor_ref) = result {
-        let result = tokio::time::timeout(Duration::from_secs_f64(timeout), actor_ref.clone().send(edge_actor::TTSMessage {
+    let result = common.write().await.tts_actors.pop_front();
+    if let Some(tts_actor) = result {
+        let result = tokio::time::timeout(Duration::from_secs_f64(timeout), tts_actor.clone().send(edge_actor::TTSMessage {
             start,
             timeout,
             content: content.to_string(),
         })).await;
 
-        common.write().await.actors_ref.push_back(actor_ref); // 发送后将 actor_ref 放回队列
+        common.write().await.tts_actors.push_back(tts_actor); // 发送后将 tts_actor 放回队列
         match result {
             Ok(Ok(audio_vec)) => {
                 return Ok(audio_vec);
@@ -92,7 +92,7 @@ async fn try_send_message(content: &str, start: f64, timeout: f64, common: Arc<R
         }
     }
 
-    Err(format!("No actor_ref available")) // 如果没有 actor_ref 或者发送失败，返回 Err 表示重试
+    Err(format!("No tts_actor available")) // 如果没有 tts_actor 或者发送失败，返回 Err 表示重试
 }
 
 async fn ping() -> &'static str{
@@ -104,16 +104,15 @@ async fn ping() -> &'static str{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     edge::get_sample().await;
     // actors_ref
-    let actors_ref = edge_actor::get_actors_ref().await;
-    let common = Common{adaptive_timeout: 3.0, actors_ref, duration_vec: Vec::new()};
+    let tts_actors = edge_actor::get_tts_actors().await;
+    let common = Common{adaptive_timeout: 5.0, tts_actors, duration_vec: Vec::new()};
     let common_rw= Arc::new(RwLock::new(common));
     let app = Router::new()
         .route("/ping", get(ping))
         .route("/tts/:text", get(tts))
         .layer(Extension(common_rw));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:5001")
-        .await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:5001").await?;
     println!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
     Ok(())
