@@ -45,7 +45,7 @@ impl Actor for TTSActor {
         let actor_ref = self.actor_ref(ctx);
         Timer::start_immediately(
             actor_ref,
-            Duration::from_secs(13),
+            Duration::from_secs(10),
             WSSMessage{},
         );
     }
@@ -79,13 +79,6 @@ impl Handler<TTSMessage> for TTSActor {
 #[async_trait]
 impl Handler<WSSMessage> for TTSActor {
     async fn handle(&mut self, _: WSSMessage, _ctx: &mut ActorContext) {
-        if self.ws_streams.len() > 0 {
-            // 弹出队列末尾的元素
-            if let Some(ws_stream) = self.ws_streams.pop_back() {
-                let (mut writer, _) = ws_stream.split();
-                let _ = writer.close().await;
-            }
-        }
         match self.tts.connect().await {
             Ok(vv) => {
                 // 在队列的前端添加元素
@@ -95,6 +88,13 @@ impl Handler<WSSMessage> for TTSActor {
                 println!("connect error {:?}", error);
             }
         };
+        if self.ws_streams.len() > 1 {
+            // 弹出队列末尾的元素
+            if let Some(ws_stream) = self.ws_streams.pop_back() {
+                let (mut writer, _) = ws_stream.split();
+                let _ = writer.close().await;
+            }
+        }
     }
 }
 
